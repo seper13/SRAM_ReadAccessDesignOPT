@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import numpy as np
+import scipy.stats
+from bayes_opt import BayesianOptimization
+from bayes_opt import UtilityFunction
+import DelayYield as DY
+import ConvertIN as CIN
+
+TFIN = 20
+randomSEED = 51 ### 9, 10, 14, 16, 17 is ei optimization + 23, 24, 25, 26, +27 + 28 // new loss 50, 51
+np.random.seed(randomSEED)
+
+rv = scipy.stats.norm(loc=0, scale=1)
+
+targetYIELD = 6.4
+
+def sigmoid(x,constrain):
+    value = constrain/round(x,4)
+    sig = 1 / (1+np.exp(-100000*(value-1)))
+    return sig + 1
+
+optimizer= BayesianOptimization(f=None,pbounds={'Nbuf': (7,17), 'pdpuRatio':(0.001,0.999), 'footRatio':(0,0.33)}, 
+                                random_state=randomSEED,
+                                verbose=2)
+utility = UtilityFunction(kind="ei", kappa=1.96, xi=0)  
+
+### init input1 cal
+[a1,a2,a3,a4] = [np.random.uniform(7,17,1),TFIN,np.random.uniform(0.001,0.999,1),np.random.uniform(0,0.33,1)]
+[b1,b2,b3,b4] = [np.random.uniform(7,17,1),TFIN,np.random.uniform(0.001,0.999,1),np.random.uniform(0,0.33,1)]
+init_input1 = {'Nbuf':float(a1), 'pdpuRatio': float(a3), 'footRatio':float(a4) }
+ConvINPUT1 = CIN.ConvertIN(TFIN, init_input1['pdpuRatio'],init_input1['footRatio'] )
+input1 = np.array([round(init_input1['Nbuf']), ConvINPUT1[0], ConvINPUT1[1], ConvINPUT1[2] ])
+print("initial INPUT1 : ", input1)
+DelayYield1 = DY.DelayYield(input1[0], input1[1], input1[2], input1[3])
+Delay1 = float(DelayYield1[0])
+Yield1 = float(DelayYield1[1])
+
+if Yield1 >= targetYIELD:
+    const1 = 1
+    init_output1 = const1*Delay1
+elif Yield1 < targetYIELD:
+    const1 = np.log(rv.cdf(-targetYIELD))/np.log(rv.cdf(-Yield1))
+    init_output1 = const1*Delay1
+print("initial OUTPUT1 : ", -init_output1)
+
+optimizer.register(params = init_input1, target = -init_output1)
+
+# ### init input2 cal
+init_input2 = {'Nbuf':float(b1), 'pdpuRatio': float(b3), 'footRatio':float(b4) }
+ConvINPUT2 = CIN.ConvertIN(TFIN, init_input2['pdpuRatio'],init_input2['footRatio'] )
+input2 = np.array([round(init_input2['Nbuf']), ConvINPUT2[0], ConvINPUT2[1], ConvINPUT2[2] ])
+print("initial INPUT2 : ", input2)
+DelayYield2 = DY.DelayYield(input2[0], input2[1], input2[2], input2[3])
+Delay2 = float(DelayYield2[0])
+Yield2 = float(DelayYield2[1])
+
+if Yield2 >= targetYIELD:
+    const2 = 1
+    init_output2 = const2*Delay2
+elif Yield2 < targetYIELD:
+    const2 = np.log(rv.cdf(-targetYIELD))/np.log(rv.cdf(-Yield2))
+    init_output2 = const2*Delay2
+print("initial OUTPUT2 : ", -init_output2)
+optimizer.register(params = init_input2, target = -init_output2)
+BEST_DESIGN = []
+BEST_INPUT = []
+BEST_RESULT = []
+currentIN = []
+### BO Run
+k = 0
+while True:
+
+    next_point = optimizer.suggest(utility)
+    print(next_point)
+    previousKappa = utility.kappa
+    previous_lengthScale = optimizer._gp.kernel.length_scale
+    
+    ConvINPUT3 = CIN.ConvertIN(TFIN, next_point['pdpuRatio'],next_point['footRatio'] )
+    # print(ConvINPUT3)
+    input3 = np.array([round(next_point['Nbuf']), ConvINPUT3[0], ConvINPUT3[1], ConvINPUT3[2] ])
+    print("next INPUT : ", input3)
+    DelayYield3 = DY.DelayYield(input3[0], input3[1], input3[2], input3[3])
+    Delay3 = float(DelayYield3[0])
+    Yield3 = float(DelayYield3[1])
+    
+    
+    if Yield3 >= targetYIELD:
+        const3 = 1
+        loss_value = const3*Delay3
+    elif Yield3 < targetYIELD:
+        const3 = np.log(rv.cdf(-targetYIELD))/np.log(rv.cdf(-Yield3))
+        loss_value = const3*Delay3
+        
+    currentIN.append(input3)
+    BEST_DESIGN.append(optimizer.max)
+    print("current maximum value = ", optimizer.max['target'])
+    BEST_OUTPUT = CIN.ConvertIN(TFIN
+                                , optimizer.max['params']['pdpuRatio'], optimizer.max['params']['footRatio'])
+    BEST_IN = [round(optimizer.max['params']['Nbuf']), BEST_OUTPUT[0], BEST_OUTPUT[1], BEST_OUTPUT[2]]
+    dummy5 = optimizer.max['target']
+    print("Current maximum input = ", BEST_IN)
+    print("Current minimum Loss = ", dummy5)
+    BEST_INPUT.append(BEST_IN)
+    BEST_RESULT.append(dummy5)
+    print("current input value = ", next_point)
+    print("current Loss Value = ", -loss_value)
+    print("iteration_number : ", k)
+    optimizer.register(params = next_point, target = -loss_value)
+    allDESIGN = np.array(optimizer.res)
+    
+    np.savetxt("/home/Taehwan/simulation/sensingYield/BObestRESULT{}.txt".format(randomSEED), BEST_RESULT, fmt='%s')
+    np.savetxt("/home/Taehwan/simulation/sensingYield/BObestDESIGN{}.txt".format(randomSEED), BEST_INPUT, fmt='%s')
+    np.savetxt("/home/Taehwan/simulation/sensingYield/BOallDESIGN{}.txt".format(randomSEED), currentIN, fmt='%s')
+    k += 1
+    if k >= 100:
+        k=0
+        break
+    
+# dummy = np.array([9.76, 0.615, 0.007]).reshape(3,1)
+# dummy2 = optimizer._gp.predict(np.atleast_2d(dummy),return_std=True)
+# print(dummy2)
+### PLOT
+
+# ConvertINPUT = []
+# ConvertOUTPUT = []
+# maxOUTPUT = []
+# for m in range(0,len(optimizer.res)):
+#     [a,b,c,d] = [optimizer.res[m]['params']['Nbuf'],optimizer.res[m]['params']['totalFIN'],
+#                   optimizer.res[m]['params']['pdpuRatio'],optimizer.res[m]['params']['footRatio'], ]
+#     result = CIN.ConvertIN(b,c,d)
+#     ConvertINPUT.append([round(a), result[0], result[1], result[2]])
+#     ConvertOUTPUT.append(optimizer.res[m]['target'])
+#     maxOUTPUT.append(optimizer.max['target'])
+#     # print(m)
+
+# region = np.linspace(0,127,128)
+# plt.plot(region, -np.array(ConvertOUTPUT), label='Loss value at each iteration')
+# plt.plot(region, -np.array(maxOUTPUT), label='Lowest Loss Value')
+# plt.title("Bayesian Opt Result of Yield & Speed")
+# plt.xlabel("Bayesian Opt Iteration Number")
+# plt.ylabel("Loss Value")
+# plt.legend()
